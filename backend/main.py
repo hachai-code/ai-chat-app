@@ -1,6 +1,10 @@
 from enum import Enum
+from typing import AsyncIterator
 
+import anthropic
 from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
 app = FastAPI()
 
@@ -30,6 +34,24 @@ async def echo(request: Request):
 @app.get("/model")
 async def model(model_name: ModelName):
     return {"model_name": model_name}
+
+
+class ChatRequest(BaseModel):
+    message: str
+    model: ModelName = ModelName.opus
+
+
+@app.post("/chat/stream", response_class=StreamingResponse)
+async def chat_stream(body: ChatRequest) -> AsyncIterator[str]:
+    async with anthropic.AsyncAnthropic() as client:
+        async with client.messages.stream(
+            model=body.model,
+            max_tokens=1024,
+            messages=[{"role": "user", "content": body.message}],
+        ) as stream:
+            async for text in stream.text_stream:
+                yield f"data: {text}\n\n"
+    yield "data: [DONE]\n\n"
 
 
 def main():
