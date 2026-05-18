@@ -5,6 +5,9 @@ import anthropic
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from dotenv import load_dotenv
+import os
+load_dotenv()
 
 app = FastAPI()
 
