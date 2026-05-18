@@ -1,6 +1,14 @@
+from enum import Enum
+
 from fastapi import FastAPI, Request
 
 app = FastAPI()
+
+
+class ModelName(str, Enum):
+    opus = "claude-opus-4-7"
+    sonnet = "claude-sonnet-4-6"
+    haiku = "claude-haiku-4-5"
 
 
 @app.get("/")
@@ -17,6 +25,11 @@ async def health():
 async def echo(request: Request):
     body = await request.json()
     return body
+
+
+@app.get("/model")
+async def model(model_name: ModelName):
+    return {"model_name": model_name}
 
 
 def main():
