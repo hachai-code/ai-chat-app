@@ -1,5 +1,6 @@
+from contextlib import asynccontextmanager
 from enum import Enum
-from typing import AsyncIterator
+from typing import Literal
 
 import anthropic
 from fastapi import FastAPI, Request
@@ -9,7 +10,17 @@ from dotenv import load_dotenv
 import os
 load_dotenv()
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.anthropic = anthropic.AsyncAnthropic()
+    try:
+        yield
+    finally:
+        await app.state.anthropic.close()
+
+
+app = FastAPI(lifespan=lifespan)
 
 
 class ModelName(str, Enum):
@@ -39,22 +50,34 @@ async def model(model_name: ModelName):
     return {"model_name": model_name}
 
 
+class MessageParam(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
 class ChatRequest(BaseModel):
-    message: str
+    messages: list[MessageParam]
+    system: str | None = None
     model: ModelName = ModelName.opus
 
 
-@app.post("/chat/stream", response_class=StreamingResponse)
-async def chat_stream(body: ChatRequest) -> AsyncIterator[str]:
-    async with anthropic.AsyncAnthropic() as client:
-        async with client.messages.stream(
-            model=body.model,
-            max_tokens=1024,
-            messages=[{"role": "user", "content": body.message}],
-        ) as stream:
+@app.post("/chat/stream")
+async def chat_stream(body: ChatRequest) -> StreamingResponse:
+    kwargs = {
+        "model": body.model,
+        "max_tokens": 1024,
+        "messages": [m.model_dump() for m in body.messages],
+    }
+    if body.system:
+        kwargs["system"] = body.system
+
+    async def event_stream():
+        async with app.state.anthropic.messages.stream(**kwargs) as stream:
             async for text in stream.text_stream:
                 yield f"data: {text}\n\n"
-    yield "data: [DONE]\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 def main():
