@@ -1,8 +1,10 @@
+import time
 from contextlib import asynccontextmanager
 from enum import Enum
 from typing import Literal
 
 import anthropic
+import structlog
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
@@ -15,6 +17,31 @@ from tenacity import (
 )
 import os
 load_dotenv()
+
+
+structlog.configure(
+    processors=[
+        structlog.processors.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso", utc=True),
+        structlog.processors.JSONRenderer(),
+    ],
+    cache_logger_on_first_use=True,
+)
+
+chat_logger = structlog.get_logger("chat")
+
+
+# USD per 1M tokens — https://platform.claude.com/docs/en/about-claude/models
+PRICING = {
+    "claude-opus-4-7":   {"input": 5.00, "output": 25.00},
+    "claude-sonnet-4-6": {"input": 3.00, "output": 15.00},
+    "claude-haiku-4-5":  {"input": 1.00, "output": 5.00},
+}
+
+
+def calculate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
+    p = PRICING.get(model, {"input": 0.0, "output": 0.0})
+    return (input_tokens * p["input"] + output_tokens * p["output"]) / 1_000_000
 
 
 RETRYABLE_ERRORS = (
@@ -125,6 +152,7 @@ async def chat_stream(body: ChatRequest):
     if body.system:
         kwargs["system"] = body.system
 
+    start = time.monotonic()
     manager, stream = await open_anthropic_stream(app.state.anthropic, kwargs)
 
     async def event_stream():
@@ -132,6 +160,21 @@ async def chat_stream(body: ChatRequest):
             async for text in stream.text_stream:
                 yield f"data: {text}\n\n"
             yield "data: [DONE]\n\n"
+
+            final = await stream.get_final_message()
+            model_id = str(body.model)
+            chat_logger.info(
+                "chat_request",
+                model=model_id,
+                input_tokens=final.usage.input_tokens,
+                output_tokens=final.usage.output_tokens,
+                cost_usd=round(
+                    calculate_cost(model_id, final.usage.input_tokens, final.usage.output_tokens),
+                    6,
+                ),
+                latency_ms=int((time.monotonic() - start) * 1000),
+                request_id=final.id,
+            )
         finally:
             await manager.__aexit__(None, None, None)
 
