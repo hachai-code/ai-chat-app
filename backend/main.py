@@ -4,11 +4,24 @@ from typing import Literal
 
 import anthropic
 from fastapi import FastAPI, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 import os
 load_dotenv()
+
+
+RETRYABLE_ERRORS = (
+    anthropic.RateLimitError,
+    anthropic.InternalServerError,
+    anthropic.APIConnectionError,
+)
 
 
 @asynccontextmanager
@@ -21,6 +34,35 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+
+def _error_response(status: int, code: str, exc: Exception) -> JSONResponse:
+    return JSONResponse(status_code=status, content={"error": code, "message": str(exc)})
+
+
+@app.exception_handler(anthropic.AuthenticationError)
+async def handle_auth(_req: Request, exc: anthropic.AuthenticationError):
+    return _error_response(401, "authentication_error", exc)
+
+
+@app.exception_handler(anthropic.BadRequestError)
+async def handle_bad_request(_req: Request, exc: anthropic.BadRequestError):
+    return _error_response(400, "bad_request", exc)
+
+
+@app.exception_handler(anthropic.RateLimitError)
+async def handle_rate_limit(_req: Request, exc: anthropic.RateLimitError):
+    return _error_response(429, "rate_limited", exc)
+
+
+@app.exception_handler(anthropic.APIConnectionError)
+async def handle_connection(_req: Request, exc: anthropic.APIConnectionError):
+    return _error_response(503, "upstream_connection_error", exc)
+
+
+@app.exception_handler(anthropic.APIStatusError)
+async def handle_status_error(_req: Request, exc: anthropic.APIStatusError):
+    return _error_response(502, "upstream_error", exc)
 
 
 class ModelName(str, Enum):
@@ -61,8 +103,20 @@ class ChatRequest(BaseModel):
     model: ModelName = ModelName.opus
 
 
+@retry(
+    retry=retry_if_exception_type(RETRYABLE_ERRORS),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    stop=stop_after_attempt(3),
+    reraise=True,
+)
+async def open_anthropic_stream(client: anthropic.AsyncAnthropic, kwargs: dict):
+    manager = client.messages.stream(**kwargs)
+    stream = await manager.__aenter__()
+    return manager, stream
+
+
 @app.post("/chat/stream")
-async def chat_stream(body: ChatRequest) -> StreamingResponse:
+async def chat_stream(body: ChatRequest):
     kwargs = {
         "model": body.model,
         "max_tokens": 1024,
@@ -71,11 +125,15 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
     if body.system:
         kwargs["system"] = body.system
 
+    manager, stream = await open_anthropic_stream(app.state.anthropic, kwargs)
+
     async def event_stream():
-        async with app.state.anthropic.messages.stream(**kwargs) as stream:
+        try:
             async for text in stream.text_stream:
                 yield f"data: {text}\n\n"
-        yield "data: [DONE]\n\n"
+            yield "data: [DONE]\n\n"
+        finally:
+            await manager.__aexit__(None, None, None)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
