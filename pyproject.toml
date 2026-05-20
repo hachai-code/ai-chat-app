@@ -6,6 +6,8 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.13.4",
+    "structlog>=25.5.0",
+    "tenacity>=9.1.4",
 ]
 [tool.fastapi]
 entrypoint = "backend.main:app"
