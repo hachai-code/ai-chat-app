@@ -113,29 +113,29 @@ export default function Chat() {
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className="flex-1 space-y-6 overflow-y-auto px-5 py-6"
+        className="flex-1 space-y-6 overflow-y-auto px-6 py-6"
       >
         {messages.length === 0 ? (
-          <p className="text-sm leading-relaxed text-zinc-400">
+          <p className="text-sm leading-relaxed text-stone-400">
             No messages yet — say hi.
           </p>
         ) : (
           messages.map((m, i) =>
             m.role === 'user' ? (
               <div key={i} className="flex justify-end">
-                <div className="max-w-[80%] whitespace-pre-wrap rounded-2xl bg-zinc-100 px-4 py-2.5 text-[15px] leading-relaxed text-zinc-800 dark:bg-zinc-800 dark:text-zinc-100">
+                <div className="max-w-[80%] whitespace-pre-wrap rounded-2xl bg-stone-100 px-4 py-2.5 text-[15px] leading-relaxed text-stone-800 dark:bg-stone-800 dark:text-stone-100">
                   {m.content}
                 </div>
               </div>
             ) : (
               <article key={i} className="space-y-1">
-                <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                <div className="text-xs font-medium text-stone-500 dark:text-stone-400">
                   Assistant
                 </div>
-                <div className="whitespace-pre-wrap text-[15px] leading-relaxed text-zinc-800 dark:text-zinc-100">
+                <div className="whitespace-pre-wrap text-[15px] leading-relaxed text-stone-800 dark:text-stone-100">
                   {m.content ||
                     (isStreaming ? (
-                      <span className="text-zinc-400">…</span>
+                      <span className="text-stone-400">…</span>
                     ) : (
                       ''
                     ))}
@@ -147,7 +147,7 @@ export default function Chat() {
       </div>
 
       {error && (
-        <div className="mx-5 mb-3 flex items-start justify-between gap-3 rounded-md border border-red-300/60 bg-red-50 px-3 py-2 text-sm leading-relaxed text-red-800 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-200">
+        <div className="mx-6 mb-3 flex items-start justify-between gap-3 rounded-xl border border-rose-200/70 bg-rose-50 px-4 py-2.5 text-sm leading-relaxed text-rose-800 dark:border-rose-900/50 dark:bg-rose-950/40 dark:text-rose-200">
           <span>Error: {error}</span>
           <button
             type="button"
@@ -159,10 +159,10 @@ export default function Chat() {
         </div>
       )}
 
-      <div className="flex h-6 items-center border-t border-zinc-200/70 px-5 text-xs text-zinc-500 dark:border-zinc-800/70">
+      <div className="flex h-6 items-center border-t border-stone-200/70 px-6 text-xs text-stone-500 dark:border-stone-800/70">
         {isStreaming ? (
           <span className="inline-flex items-center gap-2">
-            <span className="size-1.5 animate-pulse rounded-full bg-emerald-500" />
+            <span className="size-1.5 animate-pulse rounded-full bg-emerald-400" />
             <span>
               Streaming · <span className="font-mono">{tokenCount}</span>{' '}
               {tokenCount === 1 ? 'token' : 'tokens'}
@@ -174,26 +174,26 @@ export default function Chat() {
             {tokenCount === 1 ? 'token' : 'tokens'}
           </span>
         ) : (
-          <span className="text-zinc-400">Ready</span>
+          <span className="text-stone-400">Ready</span>
         )}
       </div>
 
       <form
         onSubmit={handleSend}
-        className="flex gap-2 border-t border-zinc-200 p-3 dark:border-zinc-800"
+        className="flex gap-2 border-t border-stone-200/70 p-4 dark:border-stone-800/70"
       >
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder="Send a message…"
           disabled={isStreaming}
-          className="flex-1 rounded-md border border-zinc-300 bg-transparent px-3 py-2 text-sm leading-relaxed placeholder:text-zinc-400 focus:border-zinc-500 focus:outline-none disabled:opacity-50 dark:border-zinc-700 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500"
+          className="flex-1 rounded-xl border border-stone-200 bg-stone-50/50 px-4 py-2.5 text-sm leading-relaxed placeholder:text-stone-400 focus:border-sky-300 focus:bg-white focus:outline-none focus:ring-4 focus:ring-sky-100/70 disabled:opacity-50 dark:border-stone-700 dark:bg-stone-800/30 dark:placeholder:text-stone-500 dark:focus:border-sky-500/60 dark:focus:bg-stone-800/60 dark:focus:ring-sky-900/30"
         />
         {isStreaming ? (
           <button
             type="button"
             onClick={handleStop}
-            className="rounded-md border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+            className="rounded-xl border border-stone-200 px-5 py-2.5 text-sm font-medium text-stone-700 transition hover:bg-stone-100 dark:border-stone-700 dark:text-stone-200 dark:hover:bg-stone-800"
           >
             Stop
           </button>
@@ -201,7 +201,7 @@ export default function Chat() {
           <button
             type="submit"
             disabled={!input.trim()}
-            className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-700 disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+            className="rounded-xl bg-sky-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm shadow-sky-700/30 transition hover:bg-sky-700 disabled:opacity-40 dark:bg-sky-500 dark:text-stone-950 dark:shadow-none dark:hover:bg-sky-400"
           >
             Send
           </button>
