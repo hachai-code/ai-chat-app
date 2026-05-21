@@ -187,7 +187,7 @@ export default function Chat() {
           onChange={(e) => setInput(e.target.value)}
           placeholder="Send a message…"
           disabled={isStreaming}
-          className="flex-1 rounded-xl border border-stone-200 bg-stone-50/50 px-4 py-2.5 text-sm leading-relaxed placeholder:text-stone-400 focus:border-sky-300 focus:bg-white focus:outline-none focus:ring-4 focus:ring-sky-100/70 disabled:opacity-50 dark:border-stone-700 dark:bg-stone-800/30 dark:placeholder:text-stone-500 dark:focus:border-sky-500/60 dark:focus:bg-stone-800/60 dark:focus:ring-sky-900/30"
+          className="flex-1 rounded-xl border border-stone-200 bg-stone-50/50 px-4 py-2.5 text-sm leading-relaxed placeholder:text-stone-400 focus:border-slate-300 focus:bg-white focus:outline-none focus:ring-4 focus:ring-slate-100/70 disabled:opacity-50 dark:border-stone-700 dark:bg-stone-800/30 dark:placeholder:text-stone-500 dark:focus:border-slate-500/60 dark:focus:bg-stone-800/60 dark:focus:ring-slate-800/40"
         />
         {isStreaming ? (
           <button
