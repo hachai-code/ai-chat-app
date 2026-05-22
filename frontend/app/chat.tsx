@@ -1,17 +1,29 @@
 'use client';
 
 import { useState, useRef, useEffect, FormEvent } from 'react';
-import type { Message } from './types';
+import { formatCost, type Message, type ModelId, type Usage } from './types';
 
 const API_URL = 'http://localhost:8000/chat/stream';
 
 type Props = {
   conversationId: string;
   messages: Message[];
+  totalCostUsd: number;
   onUpdateMessages: (id: string, updater: (prev: Message[]) => Message[]) => void;
+  onAddUsage: (id: string, usage: Usage) => void;
+  model: ModelId;
+  systemPrompt: string;
 };
 
-export default function Chat({ conversationId, messages, onUpdateMessages }: Props) {
+export default function Chat({
+  conversationId,
+  messages,
+  totalCostUsd,
+  onUpdateMessages,
+  onAddUsage,
+  model,
+  systemPrompt,
+}: Props) {
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -66,7 +78,11 @@ export default function Chat({ conversationId, messages, onUpdateMessages }: Pro
       const res = await fetch(API_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: 'claude-haiku-4-5', messages: history }),
+        body: JSON.stringify({
+          model,
+          messages: history,
+          ...(systemPrompt.trim() ? { system: systemPrompt } : {}),
+        }),
         signal: controller.signal,
       });
 
@@ -90,6 +106,23 @@ export default function Chat({ conversationId, messages, onUpdateMessages }: Pro
           if (!event.startsWith('data: ')) continue;
           const payload = event.slice(6);
           if (payload === '[DONE]') continue;
+          if (payload.startsWith('__ERROR__: ')) {
+            setError(payload.slice(11));
+            continue;
+          }
+          if (payload.startsWith('__USAGE__: ')) {
+            try {
+              const u = JSON.parse(payload.slice(11));
+              onAddUsage(targetId, {
+                inputTokens: u.input_tokens,
+                outputTokens: u.output_tokens,
+                costUsd: u.cost_usd,
+              });
+            } catch {
+              /* malformed usage payload — ignore */
+            }
+            continue;
+          }
           appendToAssistant(targetId, payload);
           setTokenCount((n) => n + 1);
         }
@@ -176,22 +209,24 @@ export default function Chat({ conversationId, messages, onUpdateMessages }: Pro
         </div>
       )}
 
-      <div className="flex h-6 items-center border-t border-stone-200/70 px-6 text-xs text-stone-500 dark:border-stone-800/70">
-        {isStreaming ? (
-          <span className="inline-flex items-center gap-2">
-            <span className="size-1.5 animate-pulse rounded-full bg-emerald-400" />
-            <span>
-              Streaming · <span className="font-mono">{tokenCount}</span>{' '}
-              {tokenCount === 1 ? 'token' : 'tokens'}
+      <div className="flex h-6 items-center justify-between gap-3 border-t border-stone-200/70 px-6 text-xs text-stone-500 dark:border-stone-800/70">
+        <span>
+          {isStreaming ? (
+            <span className="inline-flex items-center gap-2">
+              <span className="size-1.5 animate-pulse rounded-full bg-emerald-400" />
+              <span>
+                Streaming · <span className="font-mono">{tokenCount}</span>{' '}
+                {tokenCount === 1 ? 'token' : 'tokens'}
+              </span>
             </span>
+          ) : (
+            <span className="text-stone-400">Ready</span>
+          )}
+        </span>
+        {totalCostUsd > 0 && (
+          <span className="font-mono text-stone-500 dark:text-stone-400">
+            {formatCost(totalCostUsd)}
           </span>
-        ) : tokenCount > 0 ? (
-          <span>
-            <span className="font-mono">{tokenCount}</span>{' '}
-            {tokenCount === 1 ? 'token' : 'tokens'}
-          </span>
-        ) : (
-          <span className="text-stone-400">Ready</span>
         )}
       </div>
 

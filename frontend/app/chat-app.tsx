@@ -3,8 +3,15 @@
 import { useCallback, useEffect, useState } from 'react';
 import Chat from './chat';
 import Sidebar from './sidebar';
+import SettingsPanel from './settings-panel';
 import { loadState, saveState } from './storage';
-import type { Conversation, Message } from './types';
+import {
+  DEFAULT_SETTINGS,
+  type Conversation,
+  type Message,
+  type Settings,
+  type Usage,
+} from './types';
 
 function newConversation(): Conversation {
   const now = Date.now();
@@ -20,7 +27,9 @@ function newConversation(): Conversation {
 export default function ChatApp() {
   const [conversations, setConversations] = useState<Record<string, Conversation>>({});
   const [currentId, setCurrentId] = useState<string | null>(null);
+  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [hydrated, setHydrated] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Hydrate from localStorage on mount, or seed with a fresh conversation.
   useEffect(() => {
@@ -28,6 +37,7 @@ export default function ChatApp() {
     if (saved && Object.keys(saved.conversations).length > 0) {
       setConversations(saved.conversations);
       setCurrentId(saved.currentId ?? Object.keys(saved.conversations)[0]);
+      if (saved.settings) setSettings({ ...DEFAULT_SETTINGS, ...saved.settings });
     } else {
       const c = newConversation();
       setConversations({ [c.id]: c });
@@ -39,8 +49,8 @@ export default function ChatApp() {
   // Persist on any change (skip the initial render before hydration).
   useEffect(() => {
     if (!hydrated) return;
-    saveState({ conversations, currentId });
-  }, [conversations, currentId, hydrated]);
+    saveState({ conversations, currentId, settings });
+  }, [conversations, currentId, settings, hydrated]);
 
   const sortedConversations = Object.values(conversations).sort(
     (a, b) => b.updatedAt - a.updatedAt,
@@ -57,13 +67,28 @@ export default function ChatApp() {
     setCurrentId(id);
   }, []);
 
+  const handleAddUsage = useCallback((id: string, usage: Usage) => {
+    setConversations((prev) => {
+      const conv = prev[id];
+      if (!conv) return prev;
+      return {
+        ...prev,
+        [id]: {
+          ...conv,
+          totalInputTokens: (conv.totalInputTokens ?? 0) + usage.inputTokens,
+          totalOutputTokens: (conv.totalOutputTokens ?? 0) + usage.outputTokens,
+          totalCostUsd: (conv.totalCostUsd ?? 0) + usage.costUsd,
+        },
+      };
+    });
+  }, []);
+
   const handleUpdateMessages = useCallback(
     (id: string, updater: (prev: Message[]) => Message[]) => {
       setConversations((prev) => {
         const conv = prev[id];
         if (!conv) return prev;
         const next = updater(conv.messages);
-        // Auto-derive title from the first user message (only while still "New chat")
         const firstUser = next.find((m) => m.role === 'user');
         const title =
           conv.title === 'New chat' && firstUser
@@ -91,18 +116,29 @@ export default function ChatApp() {
             currentId={currentId}
             onSelect={handleSelect}
             onNew={handleNew}
+            onOpenSettings={() => setSettingsOpen(true)}
           />
           {current ? (
             <Chat
               conversationId={current.id}
               messages={current.messages}
+              totalCostUsd={current.totalCostUsd ?? 0}
               onUpdateMessages={handleUpdateMessages}
+              onAddUsage={handleAddUsage}
+              model={settings.model}
+              systemPrompt={settings.systemPrompt}
             />
           ) : (
             <div className="flex flex-1 items-center justify-center text-sm text-stone-400">
               Click + New chat to begin.
             </div>
           )}
+          <SettingsPanel
+            open={settingsOpen}
+            settings={settings}
+            onClose={() => setSettingsOpen(false)}
+            onSave={setSettings}
+          />
         </>
       )}
     </div>

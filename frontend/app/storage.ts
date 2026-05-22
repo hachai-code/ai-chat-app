@@ -1,10 +1,11 @@
-import type { Conversation } from './types';
+import type { Conversation, Settings } from './types';
 
 const KEY = 'chat-app:v1';
 
 export type StoredState = {
   conversations: Record<string, Conversation>;
   currentId: string | null;
+  settings?: Settings;
 };
 
 export function loadState(): StoredState | null {

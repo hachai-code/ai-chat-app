@@ -1,3 +1,4 @@
+import json
 import time
 from contextlib import asynccontextmanager
 from enum import Enum
@@ -167,24 +168,49 @@ async def chat_stream(body: ChatRequest):
         try:
             async for text in stream.text_stream:
                 yield f"data: {text}\n\n"
-            yield "data: [DONE]\n\n"
 
             final = await stream.get_final_message()
-            model_id = str(body.model)
+            model_id = body.model.value
+            cost = round(
+                calculate_cost(model_id, final.usage.input_tokens, final.usage.output_tokens),
+                6,
+            )
             chat_logger.info(
                 "chat_request",
                 model=model_id,
                 input_tokens=final.usage.input_tokens,
                 output_tokens=final.usage.output_tokens,
-                cost_usd=round(
-                    calculate_cost(model_id, final.usage.input_tokens, final.usage.output_tokens),
-                    6,
-                ),
+                cost_usd=cost,
                 latency_ms=int((time.monotonic() - start) * 1000),
                 request_id=final.id,
             )
+            usage_payload = json.dumps({
+                "input_tokens": final.usage.input_tokens,
+                "output_tokens": final.usage.output_tokens,
+                "cost_usd": cost,
+            })
+            yield f"data: __USAGE__: {usage_payload}\n\n"
+        except anthropic.APIStatusError as e:
+            msg = "upstream error"
+            try:
+                msg = e.body.get("error", {}).get("message", str(e))
+            except Exception:
+                msg = str(e)
+            chat_logger.warning(
+                "stream_aborted",
+                status=getattr(e, "status_code", None),
+                message=msg,
+            )
+            yield f"data: __ERROR__: {msg}\n\n"
+        except Exception as e:
+            chat_logger.warning("stream_aborted", message=str(e))
+            yield f"data: __ERROR__: {e}\n\n"
         finally:
-            await manager.__aexit__(None, None, None)
+            yield "data: [DONE]\n\n"
+            try:
+                await manager.__aexit__(None, None, None)
+            except Exception:
+                pass
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
