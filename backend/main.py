@@ -55,6 +55,17 @@ def calculate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
     return (input_tokens * p["input"] + output_tokens * p["output"]) / 1_000_000
 
 
+def _sse_data(payload: str) -> str:
+    """Encode payload as one SSE event using spec-compliant multi-line format.
+
+    Each newline in `payload` becomes its own ``data:`` line so the event
+    terminator (a blank line) can't collide with content. The client joins
+    the ``data:`` lines back with ``\\n``.
+    """
+    lines = payload.split("\n")
+    return "".join(f"data: {line}\n" for line in lines) + "\n"
+
+
 RETRYABLE_ERRORS = (
     anthropic.RateLimitError,
     anthropic.InternalServerError,
@@ -202,7 +213,7 @@ async def chat_stream(body: ChatRequest):
     async def event_stream():
         try:
             async for text in stream.text_stream:
-                yield f"data: {text}\n\n"
+                yield _sse_data(text)
 
             final = await stream.get_final_message()
             model_id = body.model.value
@@ -224,7 +235,7 @@ async def chat_stream(body: ChatRequest):
                 "output_tokens": final.usage.output_tokens,
                 "cost_usd": cost,
             })
-            yield f"data: __USAGE__: {usage_payload}\n\n"
+            yield _sse_data(f"__USAGE__: {usage_payload}")
         except anthropic.APIStatusError as e:
             msg = "upstream error"
             try:
@@ -236,12 +247,12 @@ async def chat_stream(body: ChatRequest):
                 status=getattr(e, "status_code", None),
                 message=msg,
             )
-            yield f"data: __ERROR__: {msg}\n\n"
+            yield _sse_data(f"__ERROR__: {msg}")
         except Exception as e:
             chat_logger.warning("stream_aborted", message=str(e))
-            yield f"data: __ERROR__: {e}\n\n"
+            yield _sse_data(f"__ERROR__: {e}")
         finally:
-            yield "data: [DONE]\n\n"
+            yield _sse_data("[DONE]")
             try:
                 await manager.__aexit__(None, None, None)
             except Exception:

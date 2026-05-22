@@ -100,8 +100,14 @@ export default function Chat({
         buffer = events.pop() ?? '';
 
         for (const event of events) {
-          if (!event.startsWith('data: ')) continue;
-          const payload = event.slice(6);
+          // Spec-compliant SSE: an event may carry multiple `data:` lines.
+          // Collect them and join with `\n` so content with newlines survives.
+          const dataLines = event
+            .split('\n')
+            .filter((line) => line.startsWith('data: '))
+            .map((line) => line.slice(6));
+          if (dataLines.length === 0) continue;
+          const payload = dataLines.join('\n');
           if (payload === '[DONE]') continue;
           if (payload.startsWith('__ERROR__: ')) {
             setError(payload.slice(11));

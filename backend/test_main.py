@@ -115,3 +115,23 @@ def test_chat_stream(mocked_chat_client):
     assert "data:  world\n\n" in body
     assert "data: __USAGE__:" in body
     assert "data: [DONE]\n\n" in body
+
+
+def test_chat_stream_multiline_chunk_not_truncated(client):
+    """A chunk containing \\n\\n must serialize as multiple data: lines so the
+    SSE event terminator doesn't collide with content (the bug where text
+    after a paragraph break was silently dropped)."""
+    app.state.anthropic = FakeAnthropic(chunks=("para1\n\npara2",))
+    r = client.post(
+        "/chat/stream",
+        json={
+            "model": "claude-haiku-4-5",
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+    )
+    assert r.status_code == 200
+    # Each newline in the content becomes its own `data:` line. The blank
+    # line in the middle is `data: ` (with trailing space, empty content).
+    assert "data: para1\ndata: \ndata: para2\n\n" in r.text
+    # And the *bad* old encoding must not appear.
+    assert "data: para1\n\npara2\n\n" not in r.text
