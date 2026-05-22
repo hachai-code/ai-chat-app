@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, FormEvent } from 'react';
 import { formatCost, type Message, type ModelId, type Usage } from './types';
 
-const API_URL = 'http://localhost:8000/chat/stream';
+const API_URL = `${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'}/chat/stream`;
 
 type Props = {
   conversationId: string;
