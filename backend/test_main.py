@@ -111,16 +111,17 @@ def test_chat_stream(mocked_chat_client):
     assert r.headers["content-type"].startswith("text/event-stream")
 
     body = r.text
-    assert "data: Hello\n\n" in body
-    assert "data:  world\n\n" in body
-    assert "data: __USAGE__:" in body
+    assert '"type": "content"' in body
+    assert '"text": "Hello"' in body
+    assert '"text": " world"' in body
+    assert '"type": "usage"' in body
     assert "data: [DONE]\n\n" in body
 
 
 def test_chat_stream_multiline_chunk_not_truncated(client):
-    """A chunk containing \\n\\n must serialize as multiple data: lines so the
-    SSE event terminator doesn't collide with content (the bug where text
-    after a paragraph break was silently dropped)."""
+    """A chunk containing \\n\\n must survive intact. JSON encoding escapes the
+    newlines so the SSE event terminator can never collide with content
+    (regression test for the dropped-paragraph bug)."""
     app.state.anthropic = FakeAnthropic(chunks=("para1\n\npara2",))
     r = client.post(
         "/chat/stream",
@@ -130,8 +131,8 @@ def test_chat_stream_multiline_chunk_not_truncated(client):
         },
     )
     assert r.status_code == 200
-    # Each newline in the content becomes its own `data:` line. The blank
-    # line in the middle is `data: ` (with trailing space, empty content).
-    assert "data: para1\ndata: \ndata: para2\n\n" in r.text
-    # And the *bad* old encoding must not appear.
-    assert "data: para1\n\npara2\n\n" not in r.text
+    # Newlines are JSON-escaped inside the payload.
+    assert r'"text": "para1\n\npara2"' in r.text
+    # Raw \n\n must not appear adjacent to a data: line — JSON encoding
+    # is precisely what prevents that.
+    assert "para1\n\npara2" not in r.text

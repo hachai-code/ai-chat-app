@@ -37,15 +37,17 @@ flowchart LR
 
 **SSE protocol on this app's wire**
 
-Multi-line text content is serialized using spec-compliant multi-line `data:` lines (one per content line) so a `\n\n` in the model's output can never collide with the SSE event terminator.
+Each event carries a JSON object with a `type` discriminator — the same pattern Anthropic and OpenAI use. `[DONE]` is the only non-JSON sentinel, kept as a literal terminator.
 
 ```
-data: Hello                                                    ← assistant token
-data: , how can I help?                                        ← assistant token
-data: __USAGE__: {"input_tokens":42,"output_tokens":87,...}    ← real usage (one event)
-data: __ERROR__: Overloaded                                    ← only on mid-stream failure
-data: [DONE]                                                   ← terminator (always)
+data: {"type":"content","text":"Hello"}
+data: {"type":"content","text":", how can I help?"}
+data: {"type":"usage","input_tokens":42,"output_tokens":87,"cost_usd":0.000234}
+data: {"type":"error","message":"Overloaded"}     ← only on mid-stream failure
+data: [DONE]                                       ← terminator (always)
 ```
+
+JSON encoding escapes newlines automatically, so model output with paragraph breaks (`\n\n`) survives transit without colliding with the SSE event terminator.
 
 ## Quickstart (5 minutes)
 
@@ -115,12 +117,12 @@ The frontend has no environment variables yet; it hardcodes `http://localhost:80
 
 The frontend POSTs the full conversation history + model + system prompt to `/chat/stream`. The backend calls `client.messages.stream(...)` (retried up to 3× on overload/5xx/connection errors **before** any response headers are sent), then yields text deltas as SSE `data:` events. After the model finishes, the backend pulls real `usage` from `stream.get_final_message()`, computes USD cost against a `PRICING` table, logs a `chat_request` line via structlog, and emits a `__USAGE__:` event before `[DONE]`. Mid-stream upstream failures are caught and turned into `__ERROR__:` events so the response always terminates with `[DONE]` and a proper closing chunk — no `INCOMPLETE_CHUNKED_ENCODING`.
 
-The frontend's `ReadableStream` reader splits on `\n\n`, collects all `data:` lines per event, joins them with `\n`, and branches on three sentinels:
+The frontend's `ReadableStream` reader splits on `\n\n`, strips `data: `, and (for non-`[DONE]` events) `JSON.parse`s the payload, then branches on `msg.type`:
 
-- `__ERROR__:` → shown in a red banner
-- `__USAGE__:` → JSON-parsed, accumulated into the conversation's running cost
+- `content` → `msg.text` appended live to the assistant message bubble
+- `usage` → token counts + cost accumulated into the conversation's running cost
+- `error` → `msg.message` shown in a red banner
 - `[DONE]` → end of stream
-- anything else → appended live to the assistant message bubble
 
 ## Observability
 

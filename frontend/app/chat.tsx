@@ -100,34 +100,29 @@ export default function Chat({
         buffer = events.pop() ?? '';
 
         for (const event of events) {
-          // Spec-compliant SSE: an event may carry multiple `data:` lines.
-          // Collect them and join with `\n` so content with newlines survives.
-          const dataLines = event
-            .split('\n')
-            .filter((line) => line.startsWith('data: '))
-            .map((line) => line.slice(6));
-          if (dataLines.length === 0) continue;
-          const payload = dataLines.join('\n');
+          if (!event.startsWith('data: ')) continue;
+          const payload = event.slice(6);
           if (payload === '[DONE]') continue;
-          if (payload.startsWith('__ERROR__: ')) {
-            setError(payload.slice(11));
+
+          let msg: { type: string; [key: string]: unknown };
+          try {
+            msg = JSON.parse(payload);
+          } catch {
             continue;
           }
-          if (payload.startsWith('__USAGE__: ')) {
-            try {
-              const u = JSON.parse(payload.slice(11));
-              onAddUsage(targetId, {
-                inputTokens: u.input_tokens,
-                outputTokens: u.output_tokens,
-                costUsd: u.cost_usd,
-              });
-            } catch {
-              /* malformed usage payload — ignore */
-            }
-            continue;
+
+          if (msg.type === 'content') {
+            appendToAssistant(targetId, String(msg.text ?? ''));
+            setTokenCount((n) => n + 1);
+          } else if (msg.type === 'usage') {
+            onAddUsage(targetId, {
+              inputTokens: Number(msg.input_tokens ?? 0),
+              outputTokens: Number(msg.output_tokens ?? 0),
+              costUsd: Number(msg.cost_usd ?? 0),
+            });
+          } else if (msg.type === 'error') {
+            setError(String(msg.message ?? 'unknown error'));
           }
-          appendToAssistant(targetId, payload);
-          setTokenCount((n) => n + 1);
         }
       }
     } catch (err) {

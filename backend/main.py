@@ -55,15 +55,14 @@ def calculate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
     return (input_tokens * p["input"] + output_tokens * p["output"]) / 1_000_000
 
 
-def _sse_data(payload: str) -> str:
-    """Encode payload as one SSE event using spec-compliant multi-line format.
+def _event(payload: dict) -> str:
+    """Encode `payload` as one SSE event with a JSON body.
 
-    Each newline in `payload` becomes its own ``data:`` line so the event
-    terminator (a blank line) can't collide with content. The client joins
-    the ``data:`` lines back with ``\\n``.
+    This is the de-facto LLM streaming standard (OpenAI, Anthropic). JSON
+    encoding escapes newlines automatically, so payload content can never
+    collide with the SSE event terminator (``\\n\\n``).
     """
-    lines = payload.split("\n")
-    return "".join(f"data: {line}\n" for line in lines) + "\n"
+    return f"data: {json.dumps(payload)}\n\n"
 
 
 RETRYABLE_ERRORS = (
@@ -213,7 +212,7 @@ async def chat_stream(body: ChatRequest):
     async def event_stream():
         try:
             async for text in stream.text_stream:
-                yield _sse_data(text)
+                yield _event({"type": "content", "text": text})
 
             final = await stream.get_final_message()
             model_id = body.model.value
@@ -230,12 +229,12 @@ async def chat_stream(body: ChatRequest):
                 latency_ms=int((time.monotonic() - start) * 1000),
                 request_id=final.id,
             )
-            usage_payload = json.dumps({
+            yield _event({
+                "type": "usage",
                 "input_tokens": final.usage.input_tokens,
                 "output_tokens": final.usage.output_tokens,
                 "cost_usd": cost,
             })
-            yield _sse_data(f"__USAGE__: {usage_payload}")
         except anthropic.APIStatusError as e:
             msg = "upstream error"
             try:
@@ -247,12 +246,12 @@ async def chat_stream(body: ChatRequest):
                 status=getattr(e, "status_code", None),
                 message=msg,
             )
-            yield _sse_data(f"__ERROR__: {msg}")
+            yield _event({"type": "error", "message": msg})
         except Exception as e:
             chat_logger.warning("stream_aborted", message=str(e))
-            yield _sse_data(f"__ERROR__: {e}")
+            yield _event({"type": "error", "message": str(e)})
         finally:
-            yield _sse_data("[DONE]")
+            yield "data: [DONE]\n\n"
             try:
                 await manager.__aexit__(None, None, None)
             except Exception:
