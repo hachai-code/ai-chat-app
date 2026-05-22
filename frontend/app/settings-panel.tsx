@@ -4,35 +4,24 @@ import { useEffect, useState, FormEvent } from 'react';
 import { MODELS, type ModelId, type Settings } from './types';
 
 type Props = {
-  open: boolean;
   settings: Settings;
   onClose: () => void;
   onSave: (next: Settings) => void;
 };
 
-export default function SettingsPanel({ open, settings, onClose, onSave }: Props) {
+export default function SettingsPanel({ settings, onClose, onSave }: Props) {
+  // Initial values come from props on mount. Parent re-mounts on each open,
+  // so we get fresh values without a prop→state sync effect.
   const [model, setModel] = useState<ModelId>(settings.model);
   const [systemPrompt, setSystemPrompt] = useState(settings.systemPrompt);
 
-  // Sync form state when the panel (re)opens.
   useEffect(() => {
-    if (open) {
-      setModel(settings.model);
-      setSystemPrompt(settings.systemPrompt);
-    }
-  }, [open, settings]);
-
-  // Close on Escape.
-  useEffect(() => {
-    if (!open) return;
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') onClose();
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
-
-  if (!open) return null;
+  }, [onClose]);
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();

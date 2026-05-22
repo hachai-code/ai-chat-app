@@ -32,16 +32,13 @@ export default function Chat({
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
 
-  // Reset per-conversation UI state and abort any in-flight stream on switch.
+  // Abort any in-flight stream when the component unmounts (parent uses a
+  // `key` prop so switching conversations remounts and resets useState).
   useEffect(() => {
-    setInput('');
-    setError(null);
-    setTokenCount(0);
-    stickToBottomRef.current = true;
     return () => {
       abortRef.current?.abort();
     };
-  }, [conversationId]);
+  }, []);
 
   function handleScroll() {
     const el = scrollRef.current;

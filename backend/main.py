@@ -1,3 +1,11 @@
+"""FastAPI backend for the chat app.
+
+Exposes a streaming chat endpoint that proxies to the Anthropic API,
+plus a handful of trivial utility endpoints. Streams responses as SSE,
+retries on transient upstream errors, and logs request usage + cost as
+JSON via structlog.
+"""
+
 import json
 import time
 from contextlib import asynccontextmanager
@@ -17,7 +25,7 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
 )
-import os
+
 load_dotenv()
 
 
@@ -42,6 +50,7 @@ PRICING = {
 
 
 def calculate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
+    """Return the USD cost of one request given token counts and model id."""
     p = PRICING.get(model, {"input": 0.0, "output": 0.0})
     return (input_tokens * p["input"] + output_tokens * p["output"]) / 1_000_000
 
@@ -55,6 +64,7 @@ RETRYABLE_ERRORS = (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Create one shared Anthropic client for the app's lifetime."""
     app.state.anthropic = anthropic.AsyncAnthropic()
     try:
         yield
@@ -73,6 +83,7 @@ app.add_middleware(
 
 
 def _error_response(status: int, code: str, exc: Exception) -> JSONResponse:
+    """Build a uniform JSON error body for FastAPI exception handlers."""
     return JSONResponse(status_code=status, content={"error": code, "message": str(exc)})
 
 
@@ -102,6 +113,8 @@ async def handle_status_error(_req: Request, exc: anthropic.APIStatusError):
 
 
 class ModelName(str, Enum):
+    """Allowed Claude model identifiers (must match keys in ``PRICING``)."""
+
     opus = "claude-opus-4-7"
     sonnet = "claude-sonnet-4-6"
     haiku = "claude-haiku-4-5"
@@ -129,11 +142,15 @@ async def model(model_name: ModelName):
 
 
 class MessageParam(BaseModel):
+    """One turn of conversation history, matching Anthropic's message shape."""
+
     role: Literal["user", "assistant"]
     content: str
 
 
 class ChatRequest(BaseModel):
+    """Body of a POST /chat/stream call from the frontend."""
+
     messages: list[MessageParam]
     system: str | None = None
     model: ModelName = ModelName.opus
@@ -146,6 +163,11 @@ class ChatRequest(BaseModel):
     reraise=True,
 )
 async def open_anthropic_stream(client: anthropic.AsyncAnthropic, kwargs: dict):
+    """Open a streaming Anthropic request with retries on overload/5xx/network.
+
+    Returns (manager, stream). The caller is responsible for closing the
+    manager via ``__aexit__`` when done iterating the stream.
+    """
     manager = client.messages.stream(**kwargs)
     stream = await manager.__aenter__()
     return manager, stream
@@ -153,6 +175,16 @@ async def open_anthropic_stream(client: anthropic.AsyncAnthropic, kwargs: dict):
 
 @app.post("/chat/stream")
 async def chat_stream(body: ChatRequest):
+    """Stream a Claude response as Server-Sent Events.
+
+    The HTTP response opens with the Anthropic call so that auth / rate-limit /
+    overload errors surface to FastAPI's exception handlers *before* headers
+    are sent. Once streaming starts, each text delta is yielded as
+    ``data: <chunk>\\n\\n``. After the model completes, the handler yields one
+    ``data: __USAGE__: {json}\\n\\n`` event with real token counts + cost, then
+    ``data: [DONE]\\n\\n``. Mid-stream errors become ``data: __ERROR__: ...``
+    events so the response still terminates cleanly.
+    """
     kwargs = {
         "model": body.model,
         "max_tokens": 1024,

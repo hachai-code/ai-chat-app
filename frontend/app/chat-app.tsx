@@ -31,8 +31,11 @@ export default function ChatApp() {
   const [hydrated, setHydrated] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  // Hydrate from localStorage on mount, or seed with a fresh conversation.
+  // localStorage is client-only; we have to read it after mount. The rule
+  // would prefer a sync-external-store pattern, but for a single one-shot
+  // read on mount this is the standard React idiom.
   useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect */
     const saved = loadState();
     if (saved && Object.keys(saved.conversations).length > 0) {
       setConversations(saved.conversations);
@@ -44,6 +47,7 @@ export default function ChatApp() {
       setCurrentId(c.id);
     }
     setHydrated(true);
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, []);
 
   // Persist on any change (skip the initial render before hydration).
@@ -120,6 +124,7 @@ export default function ChatApp() {
           />
           {current ? (
             <Chat
+              key={current.id}
               conversationId={current.id}
               messages={current.messages}
               totalCostUsd={current.totalCostUsd ?? 0}
@@ -133,12 +138,13 @@ export default function ChatApp() {
               Click + New chat to begin.
             </div>
           )}
-          <SettingsPanel
-            open={settingsOpen}
-            settings={settings}
-            onClose={() => setSettingsOpen(false)}
-            onSave={setSettings}
-          />
+          {settingsOpen && (
+            <SettingsPanel
+              settings={settings}
+              onClose={() => setSettingsOpen(false)}
+              onSave={setSettings}
+            />
+          )}
         </>
       )}
     </div>
