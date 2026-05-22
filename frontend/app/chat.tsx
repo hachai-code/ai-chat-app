@@ -1,13 +1,17 @@
 'use client';
 
 import { useState, useRef, useEffect, FormEvent } from 'react';
-
-type Message = { role: 'user' | 'assistant'; content: string };
+import type { Message } from './types';
 
 const API_URL = 'http://localhost:8000/chat/stream';
 
-export default function Chat() {
-  const [messages, setMessages] = useState<Message[]>([]);
+type Props = {
+  conversationId: string;
+  messages: Message[];
+  onUpdateMessages: (id: string, updater: (prev: Message[]) => Message[]) => void;
+};
+
+export default function Chat({ conversationId, messages, onUpdateMessages }: Props) {
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -15,6 +19,17 @@ export default function Chat() {
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
+
+  // Reset per-conversation UI state and abort any in-flight stream on switch.
+  useEffect(() => {
+    setInput('');
+    setError(null);
+    setTokenCount(0);
+    stickToBottomRef.current = true;
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, [conversationId]);
 
   function handleScroll() {
     const el = scrollRef.current;
@@ -35,8 +50,10 @@ export default function Chat() {
     const trimmed = input.trim();
     if (!trimmed || isStreaming) return;
 
+    // Capture id so streaming targets the right conversation even if user switches.
+    const targetId = conversationId;
     const history: Message[] = [...messages, { role: 'user', content: trimmed }];
-    setMessages([...history, { role: 'assistant', content: '' }]);
+    onUpdateMessages(targetId, () => [...history, { role: 'assistant', content: '' }]);
     setInput('');
     setIsStreaming(true);
     setError(null);
@@ -73,7 +90,7 @@ export default function Chat() {
           if (!event.startsWith('data: ')) continue;
           const payload = event.slice(6);
           if (payload === '[DONE]') continue;
-          appendToAssistant(payload);
+          appendToAssistant(targetId, payload);
           setTokenCount((n) => n + 1);
         }
       }
@@ -83,7 +100,7 @@ export default function Chat() {
         setError(err instanceof Error ? err.message : 'unknown error');
       }
       // If we never received any tokens, drop the empty assistant placeholder.
-      setMessages((prev) => {
+      onUpdateMessages(targetId, (prev) => {
         const last = prev[prev.length - 1];
         return last?.role === 'assistant' && last.content === ''
           ? prev.slice(0, -1)
@@ -99,8 +116,8 @@ export default function Chat() {
     abortRef.current?.abort();
   }
 
-  function appendToAssistant(chunk: string) {
-    setMessages((prev) => {
+  function appendToAssistant(id: string, chunk: string) {
+    onUpdateMessages(id, (prev) => {
       const next = [...prev];
       const last = next[next.length - 1];
       next[next.length - 1] = { ...last, content: last.content + chunk };
@@ -109,7 +126,7 @@ export default function Chat() {
   }
 
   return (
-    <>
+    <div className="flex flex-1 flex-col min-w-0">
       <div
         ref={scrollRef}
         onScroll={handleScroll}
@@ -207,6 +224,6 @@ export default function Chat() {
           </button>
         )}
       </form>
-    </>
+    </div>
   );
 }
