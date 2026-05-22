@@ -1,0 +1,35 @@
+# Keep the backend image small and never bake secrets in.
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Frontend (huge, irrelevant to backend image)
+frontend/
+node_modules/
+
+# Python cruft
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Tests (not needed in runtime image)
+backend/test_main.py
+
+# Tooling / VCS
+.git/
+.gitignore
+.github/
+.vscode/
+.idea/
+.claude/
+
+# Docs / config not needed at runtime
+README.md
+Makefile
+CLAUDE.md
+*.md
