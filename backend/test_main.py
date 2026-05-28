@@ -3,7 +3,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.main import app, limiter
+from backend.main import app, cost_cap, limiter
 
 
 # ---- Fake Anthropic client --------------------------------------------------
@@ -12,44 +12,49 @@ from backend.main import app, limiter
 
 
 class _FakeUsage:
-    input_tokens = 10
-    output_tokens = 5
+    def __init__(self, input_tokens=10, output_tokens=5):
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
 
 
 class _FakeFinalMessage:
-    id = "msg_test_fake"
-    usage = _FakeUsage()
+    def __init__(self, usage):
+        self.id = "msg_test_fake"
+        self.usage = usage
 
 
 class _FakeStream:
-    def __init__(self, chunks):
+    def __init__(self, chunks, usage):
         async def aiter():
             for chunk in chunks:
                 yield chunk
         self.text_stream = aiter()
+        self._usage = usage
 
     async def get_final_message(self):
-        return _FakeFinalMessage()
+        return _FakeFinalMessage(self._usage)
 
 
 class _FakeStreamContext:
-    def __init__(self, chunks):
+    def __init__(self, chunks, usage):
         self._chunks = chunks
+        self._usage = usage
 
     async def __aenter__(self):
-        return _FakeStream(self._chunks)
+        return _FakeStream(self._chunks, self._usage)
 
     async def __aexit__(self, *exc):
         return None
 
 
 class FakeAnthropic:
-    def __init__(self, chunks=("Hello", " world")):
+    def __init__(self, chunks=("Hello", " world"), input_tokens=10, output_tokens=5):
         self._chunks = chunks
+        self._usage = _FakeUsage(input_tokens, output_tokens)
         self.messages = self  # client.messages.stream(...) -> self.stream(...)
 
     def stream(self, **kwargs):
-        return _FakeStreamContext(self._chunks)
+        return _FakeStreamContext(self._chunks, self._usage)
 
     async def close(self):
         return None
@@ -59,9 +64,11 @@ class FakeAnthropic:
 
 
 @pytest.fixture(autouse=True)
-def reset_rate_limiter():
-    # Keep tests independent: each starts with a fresh rate-limit window.
+def reset_limits():
+    # Keep tests independent: each starts with a fresh rate-limit window and
+    # a zeroed daily cost cap.
     limiter.reset()
+    cost_cap.reset()
 
 
 @pytest.fixture
@@ -168,3 +175,16 @@ def test_chat_stream_rejects_oversized_input(client):
         },
     )
     assert r.status_code == 413
+
+
+def test_chat_stream_daily_cost_cap(client):
+    # One request that "spends" >$5: 2M haiku output tokens = $10 (>$5 cap).
+    app.state.anthropic = FakeAnthropic(output_tokens=2_000_000)
+    payload = {
+        "model": "claude-haiku-4-5",
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    # First request succeeds and records the cost.
+    assert client.post("/chat/stream", json=payload).status_code == 200
+    # Daily budget now exceeded → next request refused.
+    assert client.post("/chat/stream", json=payload).status_code == 402

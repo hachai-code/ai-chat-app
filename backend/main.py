@@ -58,6 +58,44 @@ def calculate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
     return (input_tokens * p["input"] + output_tokens * p["output"]) / 1_000_000
 
 
+DAILY_COST_LIMIT_USD = 5.0
+
+
+class DailyCostCap:
+    """In-memory tracker of cumulative spend for the current UTC day.
+
+    Resets at UTC midnight and on process restart. Good enough for a single
+    long-running instance; surviving restarts or spanning multiple instances
+    would need shared storage (Redis, a DB, etc.).
+    """
+
+    def __init__(self, limit_usd: float):
+        self.limit_usd = limit_usd
+        self._day = int(time.time() // 86_400)
+        self._spent = 0.0
+
+    def _roll_day(self) -> None:
+        today = int(time.time() // 86_400)
+        if today != self._day:
+            self._day = today
+            self._spent = 0.0
+
+    def exceeded(self) -> bool:
+        self._roll_day()
+        return self._spent >= self.limit_usd
+
+    def add(self, cost_usd: float) -> None:
+        self._roll_day()
+        self._spent += cost_usd
+
+    def reset(self) -> None:
+        self._day = int(time.time() // 86_400)
+        self._spent = 0.0
+
+
+cost_cap = DailyCostCap(DAILY_COST_LIMIT_USD)
+
+
 def _event(payload: dict) -> str:
     """Encode `payload` as one SSE event with a JSON body.
 
@@ -221,6 +259,12 @@ async def chat_stream(request: Request, body: ChatRequest):
     ``data: [DONE]\\n\\n``. Mid-stream errors become ``data: __ERROR__: ...``
     events so the response still terminates cleanly.
     """
+    if cost_cap.exceeded():
+        raise HTTPException(
+            status_code=402,
+            detail=f"Daily ${DAILY_COST_LIMIT_USD:.0f} cost limit reached. Try again tomorrow.",
+        )
+
     if estimate_input_tokens(body) > MAX_INPUT_TOKENS:
         raise HTTPException(
             status_code=413,
@@ -258,6 +302,7 @@ async def chat_stream(request: Request, body: ChatRequest):
                 latency_ms=int((time.monotonic() - start) * 1000),
                 request_id=final.id,
             )
+            cost_cap.add(cost)
             yield _event({
                 "type": "usage",
                 "input_tokens": final.usage.input_tokens,
