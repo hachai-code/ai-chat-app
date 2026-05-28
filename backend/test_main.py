@@ -154,3 +154,17 @@ def test_chat_stream_rate_limited(client):
         assert client.post("/chat/stream", json=payload).status_code == 200
     # 11th request within the window is rejected.
     assert client.post("/chat/stream", json=payload).status_code == 429
+
+
+def test_chat_stream_rejects_oversized_input(client):
+    # ~50k estimated tokens, well over the 20k limit. Rejected before any
+    # Anthropic call, so no mock client is needed.
+    huge = "x" * 200_000
+    r = client.post(
+        "/chat/stream",
+        json={
+            "model": "claude-haiku-4-5",
+            "messages": [{"role": "user", "content": huge}],
+        },
+    )
+    assert r.status_code == 413

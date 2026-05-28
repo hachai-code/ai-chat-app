@@ -14,7 +14,7 @@ from typing import Literal
 
 import anthropic
 import structlog
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
@@ -178,6 +178,19 @@ class ChatRequest(BaseModel):
     model: ModelName = ModelName.opus
 
 
+# Cap per-request input size. Output is bounded by max_tokens below, but input
+# (history + system prompt) is caller-controlled and otherwise unbounded, so a
+# single giant request could burn a lot of credits. Estimated cheaply at the
+# common ~4-chars-per-token ratio; an abuse guard only needs to be approximate.
+MAX_INPUT_TOKENS = 20_000
+
+
+def estimate_input_tokens(body: ChatRequest) -> int:
+    """Rough input-token estimate from total character count."""
+    chars = len(body.system or "") + sum(len(m.content) for m in body.messages)
+    return chars // 4
+
+
 @retry(
     retry=retry_if_exception_type(RETRYABLE_ERRORS),
     wait=wait_exponential(multiplier=1, min=1, max=10),
@@ -208,6 +221,12 @@ async def chat_stream(request: Request, body: ChatRequest):
     ``data: [DONE]\\n\\n``. Mid-stream errors become ``data: __ERROR__: ...``
     events so the response still terminates cleanly.
     """
+    if estimate_input_tokens(body) > MAX_INPUT_TOKENS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Input exceeds the {MAX_INPUT_TOKENS}-token per-request limit.",
+        )
+
     kwargs = {
         "model": body.model,
         "max_tokens": 1024,
