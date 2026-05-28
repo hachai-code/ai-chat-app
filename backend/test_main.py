@@ -3,7 +3,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.main import app
+from backend.main import app, limiter
 
 
 # ---- Fake Anthropic client --------------------------------------------------
@@ -56,6 +56,12 @@ class FakeAnthropic:
 
 
 # ---- Fixtures ---------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limiter():
+    # Keep tests independent: each starts with a fresh rate-limit window.
+    limiter.reset()
 
 
 @pytest.fixture
@@ -136,3 +142,15 @@ def test_chat_stream_multiline_chunk_not_truncated(client):
     # Raw \n\n must not appear adjacent to a data: line — JSON encoding
     # is precisely what prevents that.
     assert "para1\n\npara2" not in r.text
+
+
+def test_chat_stream_rate_limited(client):
+    app.state.anthropic = FakeAnthropic()
+    payload = {
+        "model": "claude-haiku-4-5",
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    for _ in range(10):
+        assert client.post("/chat/stream", json=payload).status_code == 200
+    # 11th request within the window is rejected.
+    assert client.post("/chat/stream", json=payload).status_code == 429

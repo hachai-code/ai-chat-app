@@ -19,6 +19,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -93,6 +96,12 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type"],
 )
+
+# Rate limiting, keyed by client IP. Note: behind a proxy (e.g. Render),
+# get_remote_address sees the proxy IP, not the end user's.
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 def _error_response(status: int, code: str, exc: Exception) -> JSONResponse:
@@ -187,7 +196,8 @@ async def open_anthropic_stream(client: anthropic.AsyncAnthropic, kwargs: dict):
 
 
 @app.post("/chat/stream")
-async def chat_stream(body: ChatRequest):
+@limiter.limit("10/minute")
+async def chat_stream(request: Request, body: ChatRequest):
     """Stream a Claude response as Server-Sent Events.
 
     The HTTP response opens with the Anthropic call so that auth / rate-limit /
