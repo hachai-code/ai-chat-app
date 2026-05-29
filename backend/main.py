@@ -19,6 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from langfuse import get_client
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
@@ -30,6 +31,11 @@ from tenacity import (
 )
 
 load_dotenv()
+
+# Langfuse tracing. Disables itself (no-ops) when LANGFUSE_* env vars are
+# absent, so the app runs fine without credentials. Created after load_dotenv
+# so it picks up keys from .env.
+langfuse = get_client()
 
 
 structlog.configure(
@@ -121,6 +127,7 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         await app.state.anthropic.close()
+        langfuse.flush()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -283,53 +290,73 @@ async def chat_stream(request: Request, body: ChatRequest):
     manager, stream = await open_anthropic_stream(app.state.anthropic, kwargs)
 
     async def event_stream():
-        try:
-            async for text in stream.text_stream:
-                yield _event({"type": "content", "text": text})
+        # One generation span per request. Input is set to just the latest user
+        # message (not the whole arg payload / system prompt) per Langfuse
+        # best practice. Model + token usage are recorded explicitly below.
+        reply_parts: list[str] = []
+        with langfuse.start_as_current_observation(
+            as_type="generation",
+            name="chat-response",
+            model=body.model.value,
+            input=body.messages[-1].content,
+        ) as gen:
+            try:
+                async for text in stream.text_stream:
+                    reply_parts.append(text)
+                    yield _event({"type": "content", "text": text})
 
-            final = await stream.get_final_message()
-            model_id = body.model.value
-            cost = round(
-                calculate_cost(model_id, final.usage.input_tokens, final.usage.output_tokens),
-                6,
-            )
-            chat_logger.info(
-                "chat_request",
-                model=model_id,
-                input_tokens=final.usage.input_tokens,
-                output_tokens=final.usage.output_tokens,
-                cost_usd=cost,
-                latency_ms=int((time.monotonic() - start) * 1000),
-                request_id=final.id,
-            )
-            cost_cap.add(cost)
-            yield _event({
-                "type": "usage",
-                "input_tokens": final.usage.input_tokens,
-                "output_tokens": final.usage.output_tokens,
-                "cost_usd": cost,
-            })
-        except anthropic.APIStatusError as e:
-            msg = "upstream error"
-            try:
-                msg = e.body.get("error", {}).get("message", str(e))
-            except Exception:
-                msg = str(e)
-            chat_logger.warning(
-                "stream_aborted",
-                status=getattr(e, "status_code", None),
-                message=msg,
-            )
-            yield _event({"type": "error", "message": msg})
-        except Exception as e:
-            chat_logger.warning("stream_aborted", message=str(e))
-            yield _event({"type": "error", "message": str(e)})
-        finally:
-            yield "data: [DONE]\n\n"
-            try:
-                await manager.__aexit__(None, None, None)
-            except Exception:
-                pass
+                final = await stream.get_final_message()
+                model_id = body.model.value
+                cost = round(
+                    calculate_cost(model_id, final.usage.input_tokens, final.usage.output_tokens),
+                    6,
+                )
+                chat_logger.info(
+                    "chat_request",
+                    model=model_id,
+                    input_tokens=final.usage.input_tokens,
+                    output_tokens=final.usage.output_tokens,
+                    cost_usd=cost,
+                    latency_ms=int((time.monotonic() - start) * 1000),
+                    request_id=final.id,
+                )
+                cost_cap.add(cost)
+                gen.update(
+                    output="".join(reply_parts),
+                    usage_details={
+                        "input_tokens": final.usage.input_tokens,
+                        "output_tokens": final.usage.output_tokens,
+                    },
+                )
+                yield _event({
+                    "type": "usage",
+                    "input_tokens": final.usage.input_tokens,
+                    "output_tokens": final.usage.output_tokens,
+                    "cost_usd": cost,
+                })
+            except anthropic.APIStatusError as e:
+                msg = "upstream error"
+                try:
+                    msg = e.body.get("error", {}).get("message", str(e))
+                except Exception:
+                    msg = str(e)
+                chat_logger.warning(
+                    "stream_aborted",
+                    status=getattr(e, "status_code", None),
+                    message=msg,
+                )
+                gen.update(output=f"[error] {msg}")
+                yield _event({"type": "error", "message": msg})
+            except Exception as e:
+                chat_logger.warning("stream_aborted", message=str(e))
+                gen.update(output=f"[error] {e}")
+                yield _event({"type": "error", "message": str(e)})
+            finally:
+                yield "data: [DONE]\n\n"
+                try:
+                    await manager.__aexit__(None, None, None)
+                except Exception:
+                    pass
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
