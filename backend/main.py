@@ -289,16 +289,20 @@ async def chat_stream(request: Request, body: ChatRequest):
     start = time.monotonic()
     manager, stream = await open_anthropic_stream(app.state.anthropic, kwargs)
 
+    # Full prompt sent to the model (system + history), as a chat message list
+    # so Langfuse renders it as a conversation and a failed request can be
+    # debugged from the exact input.
+    prompt_messages = [m.model_dump() for m in body.messages]
+    if body.system:
+        prompt_messages = [{"role": "system", "content": body.system}] + prompt_messages
+
     async def event_stream():
-        # One generation span per request. Input is set to just the latest user
-        # message (not the whole arg payload / system prompt) per Langfuse
-        # best practice. Model + token usage are recorded explicitly below.
         reply_parts: list[str] = []
         with langfuse.start_as_current_observation(
             as_type="generation",
             name="chat-response",
             model=body.model.value,
-            input=body.messages[-1].content,
+            input=prompt_messages,
         ) as gen:
             try:
                 async for text in stream.text_stream:
@@ -321,12 +325,15 @@ async def chat_stream(request: Request, body: ChatRequest):
                     request_id=final.id,
                 )
                 cost_cap.add(cost)
+                # Pass cost explicitly (ingested cost overrides Langfuse's
+                # model-price inference, which may not know these model ids).
                 gen.update(
                     output="".join(reply_parts),
                     usage_details={
                         "input_tokens": final.usage.input_tokens,
                         "output_tokens": final.usage.output_tokens,
                     },
+                    cost_details={"total": cost},
                 )
                 yield _event({
                     "type": "usage",
@@ -345,11 +352,11 @@ async def chat_stream(request: Request, body: ChatRequest):
                     status=getattr(e, "status_code", None),
                     message=msg,
                 )
-                gen.update(output=f"[error] {msg}")
+                gen.update(level="ERROR", status_message=msg)
                 yield _event({"type": "error", "message": msg})
             except Exception as e:
                 chat_logger.warning("stream_aborted", message=str(e))
-                gen.update(output=f"[error] {e}")
+                gen.update(level="ERROR", status_message=str(e))
                 yield _event({"type": "error", "message": str(e)})
             finally:
                 yield "data: [DONE]\n\n"
