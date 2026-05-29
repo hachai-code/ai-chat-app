@@ -7,10 +7,15 @@ so they don't mask raw concurrency behaviour. Serves on :8001.
 """
 
 import asyncio
+import os
 
-import anthropic
+# Disable Langfuse tracing before importing the app so a load run doesn't
+# flood a real project with thousands of junk traces.
+os.environ["LANGFUSE_TRACING_ENABLED"] = "false"
 
-from backend import main
+import anthropic  # noqa: E402
+
+from backend import main  # noqa: E402
 
 
 class _FakeStream:

@@ -64,7 +64,9 @@ async def main():
     print(f"Requests OK:      {len(all_lat)}/{N_USERS * TURNS}")
     print(f"Errors:           {len(errors)}")
     if all_lat:
-        pct = lambda q: all_lat[min(len(all_lat) - 1, int(len(all_lat) * q))]
+        def pct(q):
+            return all_lat[min(len(all_lat) - 1, int(len(all_lat) * q))]
+
         print(f"Latency p50/p95/max: {pct(0.5):.2f}s / {pct(0.95):.2f}s / {all_lat[-1]:.2f}s")
     for e in errors[:10]:
         print("  ERROR:", e["error"])
